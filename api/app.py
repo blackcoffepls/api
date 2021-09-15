@@ -1,7 +1,8 @@
 from flask import Flask
-from flask_restful import Api, Resource, reqparse, abort, fields, marshal_with
+from flask_restful import Api, Resource, reqparse, abort
 from flask_sqlalchemy import SQLAlchemy
 from flask_marshmallow import Marshmallow
+from sqlalchemy.orm import backref
 
 
 app = Flask(__name__)
@@ -10,14 +11,21 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///db.db'
 db = SQLAlchemy(app)
 ma = Marshmallow(app)
 
+class Usuarios(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    nombre = db.Column(db.String(32))
+    categorias=db.relationship("Categorias", cascade='all, delete-orphan',backref="usuario")
+    
+ 
 class Categorias(db.Model):
     id = db.Column(db.Integer, primary_key=True)
+    id_usuario=db.Column(db.Integer, db.ForeignKey('usuarios.id'))
     id_madre = db.Column(db.Integer, db.ForeignKey('categorias.id'))
     nombre = db.Column(db.String(32))
     orden = db.Column(db.Integer) 
     hijos = db.relationship("Categorias", cascade='all, delete-orphan')
 
-db.create_all()
+
 
 class CategoriasSchema(ma.SQLAlchemySchema):
     class Meta:
@@ -26,8 +34,15 @@ class CategoriasSchema(ma.SQLAlchemySchema):
     id_madre = ma.auto_field()
     nombre = ma.auto_field()
     orden = ma.auto_field()
+    id_usuario=ma.auto_field()
     hijos = ma.auto_field()
 
+class UsuariosSchema(ma.SQLAlchemySchema):
+    class Meta:
+        model = Usuarios
+    id = ma.auto_field()
+    nombre= ma.auto_field()
+    categorias=ma.auto_field()
         
 
 #################################################### AGREGA
@@ -47,23 +62,31 @@ categorias_put_args.add_argument('id2', type=int)
 
 class CategoriasApi(Resource):
 
-    def post(self):
-        categorias_schema = CategoriasSchema()
+    def post(self,user_id):
         args = categorias_post_args.parse_args()
-        nueva = Categorias (
-            id_madre = args["id_madre"],
-            nombre = args["nombre"]
-        )
-        db.session.add(nueva)  
-        db.session.commit()
-        nueva.orden = nueva.id
-        db.session.commit()
-        return categorias_schema.dump(nueva), 201
+        try:
+            cats = Usuarios.query.get(user_id).categorias
+            categorias_schema = CategoriasSchema()
+            nueva = Categorias (
+                id_usuario = user_id,
+                id_madre = args["id_madre"],
+                nombre = args["nombre"]
+            )
+            db.session.add(nueva)  
+            db.session.commit()
+            nueva.orden = nueva.id
+            db.session.commit()
+            return categorias_schema.dump(nueva), 201
+        except:
+            return abort(401)
 
-    def get(self):
-        categorias_schema = CategoriasSchema(many=True)
-        todo = Categorias.query.all()
-        return categorias_schema.dump(todo)
+    def get(self,user_id):
+        try: 
+            cats = Usuarios.query.get(user_id).categorias
+            categorias_schema = CategoriasSchema(many=True)
+            return categorias_schema.dump(cats)
+        except:
+            return abort(404)
 
     def put(self):   
         args = categorias_put_args.parse_args()
@@ -85,16 +108,18 @@ class CategoriasApi(Resource):
                     
         return "ERROR", 400
 
-
-
-    def delete(self):
+    def delete(self,user_id):
         args = categorias_delete_args.parse_args()
-        cat = Categorias.query.get(args["id"])
-        db.session.delete(cat) #Elimina en cascada todos sus hijos!
-        db.session.commit()
-        return 'nos vimo', 200
-
-api.add_resource(CategoriasApi,'/categorias')
+        try:
+            cat = Categorias.query.get(args['id'])
+            if cat.id_usuario == user_id and cat!= None:
+                db.session.delete(cat) #Elimina en cascada todos sus hijos!
+                db.session.commit()
+                return 'nos vimo', 200
+            return abort(400)
+        except:
+            return abort(404)
+api.add_resource(CategoriasApi,'/categorias/<int:user_id>')
 
 
 if __name__ == "__main__":
